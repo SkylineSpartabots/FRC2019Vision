@@ -5,23 +5,28 @@
 #include <opencv2/core/cuda.hpp>
 #include "opencv2/cudalegacy.hpp"
 #include <algorithm>
+#include <thread>
+#include <chrono>
+#include <mutex>
 using namespace std;
 using namespace cv;
 using namespace cv::cuda;
 inline uint getFirstIndex(uchar, uchar, uchar);
 
+std::mutex frame_mutex;  // protects frame //TODO
 
-Scalar hsv_min(0,215,170);
-Scalar hsv_max(160,200,200);
-const int sizeX = 640;
-const int sizeY = 480;
+
+Scalar hsv_min(73,14,157);
+Scalar hsv_max(133,110,213);
+const int sizeX = 1280;
+const int sizeY = 720;
 const int minArea = 550;
-const int minSolidity = 0.65;
-const double expectedAspectRation = 1.6;
-const double aspectRatioTolerance = 0.6;
-const Mat camera_matrix = (cv::Mat_<double>(3,3) << 786.42, 0, 297.35, 0 , 780.45, 214.74, 0, 0, 1);
-const Mat dist_coeffs = (cv::Mat_<double>(5,1) <<  2.02296730e-01, -3.61888606e00,  -9.66524854e-03, -8.83399450e-03, 1.41721964e+01);
-const Mat model_points = (cv::Mat_<Point3d>(8,1) <<  Point3d(0,0,0), Point3d(0,0,0),  Point3d(0,0,0), Point3d(0,0,0), Point3d(0,0,0),Point3d(0,0,0),Point3d(0,0,0),Point3d(0,0,0));
+const int minSolidity = 0.8;
+const double expectedAspectRation = 3.5;
+const double aspectRatioTolerance = 1;
+const Mat camera_matrix = (cv::Mat_<float>(3,3) << 786.42, 0, 297.35, 0 , 780.45, 214.74, 0, 0, 1);
+const Mat dist_coeffs = (cv::Mat_<float>(1,5) <<  2.02296730e-01, -3.61888606e00,  -9.66524854e-03, -8.83399450e-03, 1.41721964e+01);
+const Mat model_points = (cv::Mat_<Point3f>(1,8) <<  Point3d(-5,-5,0), Point3d(-10,-5,0),  Point3d(-10,0,0), Point3d(-5,0,0), Point3d(5,-5,0),Point3d(5,0,0),Point3d(10,0,0),Point3d(10,-5,0));
 
 uchar *LUMBGR2HSV;
 uchar *d_LUMBGR2HSV;
@@ -125,8 +130,12 @@ Mat getHsvMasked(Mat frame)	{
 	frame_gpu.upload(frame);
 	BGR2HSV_LUM(frame_gpu, frame_gpu);
 	mask_gpu.create(frame_gpu.rows, frame_gpu.cols, CV_8U);
+	//Mat inHSV(frame_gpu);
+	//imshow("HSV", inHSV);
 	inRange_gpu(frame_gpu, hsv_min, hsv_max, mask_gpu);
 	Mat mask(mask_gpu);
+	//imshow("threshold",mask);
+	//waitKey(1);
 	return mask;
 }
 vector<RotatedRect> getPotentialTargets(Mat mask)	{
@@ -134,20 +143,23 @@ vector<RotatedRect> getPotentialTargets(Mat mask)	{
 	vector<Vec4i> hierarchy;
 	findContours(mask,contours,hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
 	vector<RotatedRect> targets;
-	cout << "Contours Found: "<<contours.size() << "\n";
+	//cout << "Contours Found: "<<contours.size() << "\n";
 	for(int i = 0; i < contours.size(); i++)	{
 		int area = contourArea(contours[i]);
 		if(area > minArea) 	{
+			//cout << "Area " << area << "\n";
 			RotatedRect rect = minAreaRect(contours[i]);
 			//use shorter side as width when calculating aspect ratio
 			int height = (rect.size.height > rect.size.width) ? rect.size.height :  rect.size.width;
-			int width = (rect.size.height > rect.size.width) ? rect.size.height :  rect.size.width;
-			if(abs((float)width/(float)height - expectedAspectRation) < aspectRatioTolerance)	{
+			int width = (rect.size.height > rect.size.width) ? rect.size.width :  rect.size.height;
+			if(abs((float)((float)height/(float)width) - expectedAspectRation) < aspectRatioTolerance)	{
 				vector<Point>  hull;
 				convexHull(contours[i], hull);
 				int hull_area = contourArea(hull);
 				float solidity = float(area)/hull_area;
 				if(solidity > minSolidity)	{
+					//cout << "Center of Potential Target: " << rect.center.x << ", " << rect.center.y << " Aspect " << (float)((float)height/(float)width) <<  "\n";
+					//cout << "solidity " << solidity << "\n";
 					targets.push_back(rect);
 				}
 			}
@@ -169,6 +181,7 @@ class VisionTarget {
 	public:
 		RotatedRect left;
 		RotatedRect right;
+		int targetType;
 		int getCenterX() {
 			return (left.center.x + right.center.x)/2;
 		}
@@ -204,16 +217,8 @@ class VisionTarget {
 };
 VisionTarget getVisionTarget(vector<RotatedRect> potentialTargets)	{
 	vector<VisionTarget> targets;
-	/*target.TargetType = 0;
-	if(potentialTargets.size() == 1)	{
-		if(getStripType(potentialTargets[0]) == 1)	{
-			target.TargetType = 1;
-			target.right = potentialTargets[0];
-		}	else {
-			target.TargetType = 2;
-			target.right = potentialTargets[0];
-		}
-	}*/
+	VisionTarget Target;
+	Target.targetType = 0;
 	if(potentialTargets.size() > 1)	{
 		for(int i = 0; i < potentialTargets.size()-1; i++)	{
 			if(getStripType(potentialTargets[i]) == 2 && getStripType(potentialTargets[i+1]) == 1) {
@@ -223,45 +228,87 @@ VisionTarget getVisionTarget(vector<RotatedRect> potentialTargets)	{
 				targets.push_back(temp);
 			}
 		}
+		//do this in O(n)
 		sort(targets.begin(), targets.end(), [](VisionTarget a, VisionTarget b)	{
 			return abs(a.getCenterX()-sizeX/2) < abs(b.getCenterX()-sizeX/2);
 		});
+		if(targets.size() > 0)	{
+			Target = targets[0];
+			Target.targetType = 1;
+		}
 	}
-	return targets[0];
+	return Target;
 }
 
+vector<cv::Point2d> getImagePointsFromFrame(Mat* frame)	{
+	Mat mask;
+	vector<cv::Point2d> image_points;
+	mask = getHsvMasked(*frame);
+	vector<RotatedRect> targets = getPotentialTargets(mask);
+	if(targets.size() <= 1) return image_points;
+	VisionTarget target = getVisionTarget(targets);
+	if(target.targetType == 1)	{
+		cout << "Target Found \n";
+	}
+	if(target.targetType == 1) {
+		image_points = target.eightPointImageDescriptor();
+	}
+	return image_points;
+}
 
+void getRotationAndTranslationVectors(Mat* frame,Mat* rotation_vector,Mat* translation_vector, bool* newVector)	{
+	vector<cv::Point2d> image_points;
+	image_points = getImagePointsFromFrame(frame);
+	if(image_points.size() != 8) {
+			*newVector = false;
+			return;
+	}
+	Mat image_points_matrix = Mat(image_points);
+	dist_coeffs.convertTo(dist_coeffs,CV_32F);
+	*newVector = cv::solvePnP(model_points,image_points_matrix,camera_matrix,dist_coeffs,*rotation_vector, *translation_vector, false,  SOLVEPNP_ITERATIVE);
+}
 
+void processFrameThread(Mat* frame,Mat* rotation_vector,Mat* translation_vector, bool* newImage, bool* newVector)	{
+	for(;	; )	{
+		if(*newImage == false) continue;
+		getRotationAndTranslationVectors(frame,rotation_vector,translation_vector, newVector);
+		*newImage = false;
+	}
+}
+
+void printInfo(Mat* rotation_vector, Mat* translation_vector, bool* newVector)	{
+	for(; ;)	{
+		if(*newVector)	{
+			cout << "Distance To Target " << (*translation_vector).at<double>(2,0) << "\n";
+			*newVector = false;
+		}
+	}
+}
 int main(int argc, char** argv)
 {
 	setDevice(0);
 	initializeLUM();
-	VideoCapture capture("/dev/video1");
+	//VideoCapture capture("/dev/video1");
+	VideoCapture capture("vision.mp4");
 	VideoWriter video;
-	video.open("appsrc ! videoconvert ! video/x-raw, format=(string)I420, width=(int)640, height=(int)480 ! omxh264enc bitrate=600000 ! video/x-h264, stream-format=(string)byte-stream ! h264parse ! rtph264pay ! udpsink host=10.0.0.60 port=5000 sync=true ", 0, 30, cv::Size(1280, 720), true);
+	Mat rotation_vector; // Rotation in axis-angle form
+	Mat translation_vector;
+	Mat frame;
+	bool newImage = false;
+	bool newVector = false;
+	video.open("appsrc ! videoconvert ! video/x-raw, format=(string)I420, width=(int)1280, height=(int)720 ! omxh264enc bitrate=600000 ! video/x-h264, stream-format=(string)byte-stream ! h264parse ! rtph264pay ! udpsink host=10.0.0.60 port=5000 sync=true ", 0, 30, cv::Size(1280, 720), true);
 	capture.set(CAP_PROP_AUTOFOCUS, 0);
 	capture.set(CAP_PROP_FRAME_WIDTH, sizeX);
 	capture.set(CAP_PROP_FRAME_HEIGHT, sizeY);
+	thread print (printInfo, &rotation_vector,&translation_vector,&newVector);
+	thread process (processFrameThread,&frame,&rotation_vector,&translation_vector,&newImage, &newVector);
 	for (; ; )
 	{
-		Mat frame, mask;
 		capture.read(frame);
 		if (frame.empty())	{
 			break;
 		}
-		mask = getHsvMasked(frame);
-		vector<RotatedRect> targets = getPotentialTargets(mask);
-		cout << "Targets Found: "<<targets.size() << "\n";
-		if(targets.size() <= 1) continue;
-		VisionTarget target = getVisionTarget(targets);
-		vector<cv::Point2d> image_points;
-		Mat image_points_matrix = Mat(image_points);
-		Mat rotation_vector; // Rotation in axis-angle form
-    Mat translation_vector;
-		image_points = target.eightPointImageDescriptor();
-		cv::cuda::solvePnPRansac(model_points,image_points_matrix,camera_matrix,dist_coeffs,rotation_vector, translation_vector);
 		video.write(frame);
-		cout << "Rotation Vector " << endl << rotation_vector << endl;
-    cout << "Translation Vector" << endl << translation_vector << endl;
+		newImage = true;
 	}
 }
