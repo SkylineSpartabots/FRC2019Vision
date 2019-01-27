@@ -32,10 +32,8 @@ const string DEBUG_STRING = "appsrc ! videoconvert ! video/x-raw, format=(string
 VideoWriter debug;
 const int PORTNUMBER = 5806;
 
-
 const Mat camera_matrix = (cv::Mat_<float>(3,3) << 786.42, 0, 297.35, 0 , 780.45, 214.74, 0, 0, 1);
-const Mat dist_coeffs = (cv::Mat_<float>(1,5) <<  0, 0,  0, 0, 0);
-//const Mat model_points = (cv::Mat_<Point3f>(1,8) <<  Point3d(-5,-5,0), Point3d(-10,-5,0),  Point3d(-10,0,0), Point3d(-5,0,0), Point3d(5,-5,0),Point3d(5,0,0),Point3d(10,0,0),Point3d(10,-5,0));
+const Mat dist_coeffs = (cv::Mat_<float>(1,5) <<  0, 0,  0, 0, 0); //TODO
 const Mat model_points = (cv::Mat_<Point3f>(1,8) <<  Point3d(-4.38,-5.32,0),  Point3d(-6.313,-4.819,0), Point3d(-5.936,0.5,0),  Point3d(-4,0,0), Point3d(4.377,-5.32,0), Point3d(4,0,0),Point3d(5.936,0.5,0),Point3d(6.313,-4.82,0));
 
 Scalar hsv_min(22,0,144);
@@ -147,12 +145,8 @@ Mat getHsvMasked(Mat frame)	{
 	frame_gpu.upload(frame);
 	BGR2HSV_LUM(frame_gpu, frame_gpu);
 	mask_gpu.create(frame_gpu.rows, frame_gpu.cols, CV_8U);
-	//Mat inHSV(frame_gpu);
-	//imshow("HSV", inHSV);
 	inRange_gpu(frame_gpu, hsv_min, hsv_max, mask_gpu);
 	Mat mask(mask_gpu);
-	//imshow("threshold",mask);
-	//waitKey(1);
 	return mask;
 }
 vector<RotatedRect> getPotentialTargets(Mat mask)	{
@@ -160,13 +154,10 @@ vector<RotatedRect> getPotentialTargets(Mat mask)	{
 	vector<Vec4i> hierarchy;
 	findContours(mask,contours,hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
 	vector<RotatedRect> targets;
-	//cout << "Contours Found: "<<contours.size() << "\n";
 	for(int i = 0; i < contours.size(); i++)	{
 		int area = contourArea(contours[i]);
 		if(area > minArea) 	{
-			//cout << "Area " << area << "\n";
 			RotatedRect rect = minAreaRect(contours[i]);
-			//use shorter side as width when calculating aspect ratio
 			int height = (rect.size.height > rect.size.width) ? rect.size.height :  rect.size.width;
 			int width = (rect.size.height > rect.size.width) ? rect.size.width :  rect.size.height;
 			if(abs((float)((float)height/(float)width) - expectedAspectRation) < aspectRatioTolerance)	{
@@ -175,8 +166,6 @@ vector<RotatedRect> getPotentialTargets(Mat mask)	{
 				int hull_area = contourArea(hull);
 				float solidity = float(area)/hull_area;
 				if(solidity > minSolidity)	{
-					//cout << "Center of Potential Target: " << rect.center.x << ", " << rect.center.y << " Aspect " << (float)((float)height/(float)width) <<  "\n";
-					//cout << "solidity " << solidity << "\n";
 					targets.push_back(rect);
 				}
 			}
@@ -189,7 +178,7 @@ vector<RotatedRect> getPotentialTargets(Mat mask)	{
 }
 int getStripType(RotatedRect strip)	{
 	if(strip.size.height > strip.size.width)	{
-		return 1;
+		return 1; //right strip
 	}	else {
 		return 2;
 	}
@@ -261,15 +250,19 @@ vector<cv::Point2d> getImagePointsFromFrame(Mat* frame)	{
 	Mat mask;
 	Scalar color(0,0,255);
 	vector<cv::Point2d> image_points;
-	mask = getHsvMasked(*frame);
+
+	mask = getHsvMasked(*frame); //TODO: protect frame with mutex
+
 	vector<RotatedRect> targets = getPotentialTargets(mask);
 	if(targets.size() >= 1) {
 		VisionTarget target = getVisionTarget(targets);
 		if(target.targetType == 1) {
 			image_points = target.eightPointImageDescriptor();
+
 			for(Point2f p : image_points)	{
-				circle(*frame, p, 5,color,5,LINE_8);
+				circle(*frame, p, 5,color,5,LINE_8); //not going to fly, not thread safe, but works for now
 			}
+
 		}
 	}
 	debug.write(*frame);
@@ -292,7 +285,6 @@ void processFrameThread(Mat* frame,Mat* rotation_vector,Mat* translation_vector,
 	for(;	; )	{
 		if(*newImage == false) continue;
 		getRotationAndTranslationVectors(frame,rotation_vector,translation_vector, newVector);
-		//cout << "Frame Processed\n";
 		if(*newVector)	{
 			string s = "Distance To Target " + to_string((*translation_vector).at<double>(2,0)) + "\n";
 			cout << s;
@@ -320,15 +312,11 @@ void printInfo(Mat* rotation_vector, Mat* translation_vector, bool* newVector)	{
 	if (newsockfd < 0)	cout << "\nFailed to accept socket connection\n";
 	for(; ;)	{
 		if(*newVector)	{
-			string s = "Distance To Target " + to_string((*translation_vector).at<double>(2,0)) + "\n";
+			string s = "Distance To Target " + to_string((*translation_vector).at<double>(2,0)) + "\n"; //TODO
 			cout << s;
 			char toSend[1024];
-			//char read[1024] = {0};
 			strncpy(toSend,s.c_str(),sizeof(toSend));
 			send(newsockfd,toSend,strlen(toSend),0);
-			//int rslt = recv(newsockfd,read,1024,0);
-			//string read_str = read;
-			//cout << "BEGIN: " << read << "END\n";
 			*newVector = false;
 		}
 	}
@@ -338,7 +326,6 @@ int main(int argc, char** argv)
 	setDevice(0);
 	initializeLUM();
 	VideoCapture capture("/dev/video1");
-	//VideoCapture capture("vision.mp4");
 	VideoWriter video;
 	Mat rotation_vector; // Rotation in axis-angle form
 	Mat translation_vector;
@@ -350,6 +337,8 @@ int main(int argc, char** argv)
 	capture.set(CAP_PROP_AUTOFOCUS, 0);
 	capture.set(CAP_PROP_FRAME_WIDTH, sizeX);
 	capture.set(CAP_PROP_FRAME_HEIGHT, sizeY);
+
+	//Start three parallel tasks
 	thread print (printInfo, &rotation_vector,&translation_vector,&newVector);
 	thread process (processFrameThread,&frame,&rotation_vector,&translation_vector,&newImage, &newVector);
 	for (; ; )
