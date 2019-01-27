@@ -29,21 +29,24 @@ const int sizeY = 480;
 //TODO: String formatter
 const string STREAM_STRING = "appsrc ! videoconvert ! video/x-raw, format=(string)I420, width=(int)640, height=(int)480 ! omxh264enc bitrate=600000 ! video/x-h264, stream-format=(string)byte-stream ! h264parse ! rtph264pay ! udpsink host=10.29.76.149 port=5801 sync=true ";
 const string DEBUG_STRING = "appsrc ! videoconvert ! video/x-raw, format=(string)I420, width=(int)640, height=(int)480 ! omxh264enc bitrate=600000 ! video/x-h264, stream-format=(string)byte-stream ! h264parse ! rtph264pay ! udpsink host=10.29.76.149 port=5802 sync=true ";
+const string TARGET_STRING = "appsrc ! videoconvert ! video/x-raw, format=(string)I420, width=(int)640, height=(int)480 ! omxh264enc bitrate=600000 ! video/x-h264, stream-format=(string)byte-stream ! h264parse ! rtph264pay ! udpsink host=10.29.76.149 port=5803 sync=true ";
 VideoWriter debug;
-const int PORTNUMBER = 5806;
+VideoWriter target_stream;
+const int PORTNUMBER = 5807;
 
 
 const Mat camera_matrix = (cv::Mat_<float>(3,3) << 786.42, 0, 297.35, 0 , 780.45, 214.74, 0, 0, 1);
-const Mat dist_coeffs = (cv::Mat_<float>(1,5) <<  0, 0,  0, 0, 0);
-//const Mat model_points = (cv::Mat_<Point3f>(1,8) <<  Point3d(-5,-5,0), Point3d(-10,-5,0),  Point3d(-10,0,0), Point3d(-5,0,0), Point3d(5,-5,0),Point3d(5,0,0),Point3d(10,0,0),Point3d(10,-5,0));
-const Mat model_points = (cv::Mat_<Point3f>(1,8) <<  Point3d(-4.38,-5.32,0),  Point3d(-6.313,-4.819,0), Point3d(-5.936,0.5,0),  Point3d(-4,0,0), Point3d(4.377,-5.32,0), Point3d(4,0,0),Point3d(5.936,0.5,0),Point3d(6.313,-4.82,0));
+const Mat dist_coeffs = (cv::Mat_<float>(1,5) <<  2.02296730e-01, -3.61888606e00,  -9.66524854e-03, -8.83399450e-03, 1.41721964e+01);
+const Mat model_points = (cv::Mat_<Point3f>(1,8) <<  Point3d(-5,-5,0), Point3d(-10,-5,0),  Point3d(-10,0,0), Point3d(-5,0,0), Point3d(5,-5,0),Point3d(5,0,0),Point3d(10,0,0),Point3d(10,-5,0));
+int minH = 21, minS = 0, minV = 144;
+int maxH = 94, maxS = 98, maxV = 255;
 
-Scalar hsv_min(22,0,144);
-Scalar hsv_max(98,94,255);
-const int minArea = 300;
-const int minSolidity = 0.8;
-const double expectedAspectRation = 3.5;
-const double aspectRatioTolerance = 1;
+//Scalar hsv_min(73,14,157);
+//Scalar hsv_max(133,110,213);
+int minArea = 300;
+int minSolidity = 0.85;
+double expectedAspectRation = 3;
+double aspectRatioTolerance = 1;
 
 uchar *LUMBGR2HSV;
 uchar *d_LUMBGR2HSV;
@@ -149,6 +152,10 @@ Mat getHsvMasked(Mat frame)	{
 	mask_gpu.create(frame_gpu.rows, frame_gpu.cols, CV_8U);
 	//Mat inHSV(frame_gpu);
 	//imshow("HSV", inHSV);
+	frame_mutex.lock();
+	Scalar hsv_min(minH,minS,minV);
+	Scalar hsv_max(maxH,maxS,maxV);
+	frame_mutex.unlock();
 	inRange_gpu(frame_gpu, hsv_min, hsv_max, mask_gpu);
 	Mat mask(mask_gpu);
 	//imshow("threshold",mask);
@@ -158,7 +165,9 @@ Mat getHsvMasked(Mat frame)	{
 vector<RotatedRect> getPotentialTargets(Mat mask)	{
 	vector< vector<Point> > contours;
 	vector<Vec4i> hierarchy;
-	findContours(mask,contours,hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
+	Scalar color(255,0,0);
+	findContours(mask,contours,hierarchy, CV_RETR_TREE, CV_CHAIN_APPROX_SIMPLE);
+	cv::cvtColor(mask,mask,COLOR_GRAY2BGR);
 	vector<RotatedRect> targets;
 	//cout << "Contours Found: "<<contours.size() << "\n";
 	for(int i = 0; i < contours.size(); i++)	{
@@ -169,19 +178,23 @@ vector<RotatedRect> getPotentialTargets(Mat mask)	{
 			//use shorter side as width when calculating aspect ratio
 			int height = (rect.size.height > rect.size.width) ? rect.size.height :  rect.size.width;
 			int width = (rect.size.height > rect.size.width) ? rect.size.width :  rect.size.height;
+			frame_mutex.lock();
 			if(abs((float)((float)height/(float)width) - expectedAspectRation) < aspectRatioTolerance)	{
 				vector<Point>  hull;
 				convexHull(contours[i], hull);
 				int hull_area = contourArea(hull);
 				float solidity = float(area)/hull_area;
 				if(solidity > minSolidity)	{
+					drawContours(mask,contours, i, color,2,LINE_8,hierarchy,2);
 					//cout << "Center of Potential Target: " << rect.center.x << ", " << rect.center.y << " Aspect " << (float)((float)height/(float)width) <<  "\n";
 					//cout << "solidity " << solidity << "\n";
 					targets.push_back(rect);
 				}
 			}
+			frame_mutex.unlock();
 		}
 	}
+	target_stream.write(mask);
 	sort(targets.begin(), targets.end(), [](const RotatedRect& a, const RotatedRect& b)	{
 		return a.center.x < b.center.x;
 	});
@@ -236,9 +249,11 @@ VisionTarget getVisionTarget(vector<RotatedRect> potentialTargets)	{
 	vector<VisionTarget> targets;
 	VisionTarget Target;
 	Target.targetType = 0;
+	cout << potentialTargets.size() << "Strips Found\n";
 	if(potentialTargets.size() > 1)	{
 		for(int i = 0; i < potentialTargets.size()-1; i++)	{
-			if(getStripType(potentialTargets[i]) == 2 && getStripType(potentialTargets[i+1]) == 1) {
+			cout << "Of Type: " << getStripType(potentialTargets[0]) << " and of type: " << getStripType(potentialTargets[1]) << "\n";
+			if(getStripType(potentialTargets[i])  != getStripType(potentialTargets[i+1]) ) {
 				VisionTarget temp;
 				temp.right = potentialTargets[i+1];
 				temp.left = potentialTargets[i];
@@ -259,20 +274,16 @@ VisionTarget getVisionTarget(vector<RotatedRect> potentialTargets)	{
 
 vector<cv::Point2d> getImagePointsFromFrame(Mat* frame)	{
 	Mat mask;
-	Scalar color(0,0,255);
 	vector<cv::Point2d> image_points;
 	mask = getHsvMasked(*frame);
 	vector<RotatedRect> targets = getPotentialTargets(mask);
-	if(targets.size() >= 1) {
-		VisionTarget target = getVisionTarget(targets);
-		if(target.targetType == 1) {
-			image_points = target.eightPointImageDescriptor();
-			for(Point2f p : image_points)	{
-				circle(*frame, p, 5,color,5,LINE_8);
-			}
-		}
+	//cv::cvtColor(mask,mask, COLOR_GRAY2BGR);
+	//debug.write(mask);
+	if(targets.size() <= 1) return image_points;
+	VisionTarget target = getVisionTarget(targets);
+	if(target.targetType == 1) {
+		image_points = target.eightPointImageDescriptor();
 	}
-	debug.write(*frame);
 	return image_points;
 }
 
@@ -293,12 +304,17 @@ void processFrameThread(Mat* frame,Mat* rotation_vector,Mat* translation_vector,
 		if(*newImage == false) continue;
 		getRotationAndTranslationVectors(frame,rotation_vector,translation_vector, newVector);
 		//cout << "Frame Processed\n";
-		if(*newVector)	{
-			string s = "Distance To Target " + to_string((*translation_vector).at<double>(2,0)) + "\n";
-			cout << s;
-		}
 		*newImage = false;
 	}
+}
+std::vector<std::string> split(const std::string& s, char delimiter)	{
+	std::vector<std::string> tokens;
+	std::string token;
+	std::istringstream tokenStream(s);
+	while(std::getline(tokenStream, token, delimiter))	{
+		tokens.push_back(token);
+	}
+	return tokens;
 }
 
 void printInfo(Mat* rotation_vector, Mat* translation_vector, bool* newVector)	{
@@ -320,17 +336,38 @@ void printInfo(Mat* rotation_vector, Mat* translation_vector, bool* newVector)	{
 	if (newsockfd < 0)	cout << "\nFailed to accept socket connection\n";
 	for(; ;)	{
 		if(*newVector)	{
-			string s = "Distance To Target " + to_string((*translation_vector).at<double>(2,0)) + "\n";
+			string s = "% " + to_string((*translation_vector).at<double>(2,0)) + "%\n";
 			cout << s;
 			char toSend[1024];
-			//char read[1024] = {0};
 			strncpy(toSend,s.c_str(),sizeof(toSend));
 			send(newsockfd,toSend,strlen(toSend),0);
-			//int rslt = recv(newsockfd,read,1024,0);
-			//string read_str = read;
-			//cout << "BEGIN: " << read << "END\n";
 			*newVector = false;
 		}
+
+		char read[1024] = {0};
+		int rslt = recv(newsockfd,read,1024,0);
+		string read_str = read;
+		cout << "Begin: " << read_str << "END\n";
+		std::vector<std::string> HSV_values_read = split(read_str,'%');
+		if(HSV_values_read.size() > 1)	{
+			std::vector<std::string> thresholds = split(HSV_values_read[1],';');
+			if(thresholds.size() >= 10)	{
+				frame_mutex.lock();
+				minH = atof(thresholds[0].c_str());
+				minS = atof(thresholds[1].c_str());
+				minV = atof(thresholds[2].c_str());
+				maxH = atof(thresholds[3].c_str());
+				maxS = atof(thresholds[4].c_str());
+				maxV = atof(thresholds[5].c_str());
+				minArea = atof(thresholds[6].c_str());
+				minSolidity = atof(thresholds[7].c_str());
+				expectedAspectRation = atof(thresholds[8].c_str());
+				aspectRatioTolerance = atof(thresholds[9].c_str());
+				frame_mutex.unlock();
+		}
+			cout << "BEGIN: " << thresholds[0] << " ## " << thresholds[9] <<"END\n";
+		}
+		this_thread::sleep_for(chrono::milliseconds(100));
 	}
 }
 int main(int argc, char** argv)
@@ -347,6 +384,7 @@ int main(int argc, char** argv)
 	bool newVector = false;
 	video.open(STREAM_STRING, 0, 30, cv::Size(sizeX, sizeY), true);
 	debug.open(DEBUG_STRING, 0,30,cv::Size(sizeX, sizeY), true);
+	target_stream.open(TARGET_STRING,0,30,cv::Size(sizeX, sizeY), true);
 	capture.set(CAP_PROP_AUTOFOCUS, 0);
 	capture.set(CAP_PROP_FRAME_WIDTH, sizeX);
 	capture.set(CAP_PROP_FRAME_HEIGHT, sizeY);
