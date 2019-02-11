@@ -46,19 +46,19 @@ def aspectRatioTolerance(x):
     global tolerance;
     tolerance = x/100.0;
 cv2.namedWindow('image')
-cv2.createTrackbar('Hn','image',0,180,setHn)
+cv2.createTrackbar('Hn','image',22,180,setHn)
 cv2.createTrackbar('Sn','image',0,255,setSn)
-cv2.createTrackbar('Vn','image',0,255,setVn)
-cv2.createTrackbar('Hx','image',0,180,setHx)
-cv2.createTrackbar('Sx','image',0,255,setSx)
-cv2.createTrackbar('Vx','image',0,255,setVx)
+cv2.createTrackbar('Vn','image',144,255,setVn)
+cv2.createTrackbar('Hx','image',98,180,setHx)
+cv2.createTrackbar('Sx','image',94,255,setSx)
+cv2.createTrackbar('Vx','image',255,255,setVx)
 
 cv2.createTrackbar('minArea','image',0,1000,setMinArea)
 cv2.createTrackbar('minSolidity','image',0,100,setMinSolidity)
 cv2.createTrackbar('aspectRatio','image',0,600,setAspectRatio)
 cv2.createTrackbar('rationTolerance','image',0,400,aspectRatioTolerance)
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-    s.connect(('10.29.76.86',5807))
+    s.connect(('10.0.0.93',5807))
     print ("connected");
     while True:
         string = "%" + str(Hn) + ";" + str(Sn) + ";" + str(Vn) + ";" + str(Hx) + ";" + str(Sx) + ";" + str(Vx) + ";" + str(min_area) + ";" + str(min_solidity) + ";" + str(aspectRatio) + ";" + str(tolerance) + "%";

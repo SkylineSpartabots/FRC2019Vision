@@ -1,0 +1,1 @@
+C:\Users\NeilHazra\Miniconda3\envs\tensorflow\python.exe tune_jetson.py

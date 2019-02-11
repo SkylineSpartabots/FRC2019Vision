@@ -3,14 +3,14 @@ import cv2
 
 
 # Create capture
-cap = cv2.VideoCapture("PUT GST STRING")
+cap = cv2.VideoCapture(0)
 
 # Check if cap is open
 if cap.isOpened() is not True:
     quit()
 # Create videowriter as a SHM sink
 #out = cv2.VideoWriter(gst_str_rtp, 0, fps, (frame_width, frame_height), True)
-
+cap.set(cv2.CAP_PROP_AUTOFOCUS,0);
 # Loop it
 i = 0
 while True:
