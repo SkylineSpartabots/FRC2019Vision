@@ -8,11 +8,9 @@
 #include <algorithm>
 #include <thread>
 #include <chrono>
-#include <mutex>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <stdlib.h>
-
 #include <netinet/in.h>
 #include <string.h>
 #include <arpa/inet.h>
@@ -23,29 +21,31 @@ using namespace cv::cuda;
 inline uint getFirstIndex(uchar, uchar, uchar);
 
 shared_ptr<NetworkTable> myNetworkTable; //our networktable for reading/writing
-string netTableAddress = "10.0.0.60";
-std::mutex frame_mutex;  // protects frame //TODO
+string netTableAddress = "10.29.76.2";
 
 const int sizeX = 640;
 const int sizeY = 480;
-const int fps = 15;
+const int fps = 30;
+
 //TODO: String formatter
-const string STREAM_STRING = "appsrc ! videoconvert ! video/x-raw, format=(string)I420, width=(int)640, height=(int)480 ! omxh264enc bitrate=600000 ! video/x-h264, stream-format=(string)byte-stream ! h264parse ! rtph264pay ! udpsink host=10.0.0.60 port=5801 sync=true ";
-const string DEBUG_STRING = "appsrc ! videoconvert ! video/x-raw, format=(string)I420, width=(int)640, height=(int)480 ! omxh264enc bitrate=600000 ! video/x-h264, stream-format=(string)byte-stream ! h264parse ! rtph264pay ! udpsink host=10.0.0.60 port=5802 sync=true ";
+//Driver Station at 10.29.76.5 IP
+const string STREAM_STRING = "appsrc ! videoconvert ! video/x-raw, format=(string)I420, width=(int)640, height=(int)480 ! omxh264enc bitrate=600000 ! video/x-h264, stream-format=(string)byte-stream ! h264parse ! rtph264pay ! udpsink host=10.29.76.5 port=5801 sync=true ";
+const string DEBUG_STRING = "appsrc ! videoconvert ! video/x-raw, format=(string)I420, width=(int)640, height=(int)480 ! omxh264enc bitrate=600000 ! video/x-h264, stream-format=(string)byte-stream ! h264parse ! rtph264pay ! udpsink host=10.29.76.5 port=5802 sync=true ";
 VideoWriter debug;
+//const Mat camera_matrix = (cv::Mat_<float>(3,3) << 786.42, 0, 297.35, 0 , 780.45, 214.74, 0, 0, 1);
+const Mat camera_matrix = (cv::Mat_<float>(3,3) << 665.126, 0, 328.04, 0 , 662.07, 244.97, 0, 0, 1);
+//const Mat dist_coeffs = (cv::Mat_<float>(1,5) <<  0, 0,  0, 0, 0);
+const Mat dist_coeffs = (cv::Mat_<float>(1,5) <<  0.11068, -0.8106,  -0.004023, 0.00622, 1.1949);
+const Mat model_points = (cv::Mat_<Point3f>(1,6) <<  /*Point3d(-5.377,-5.32,0),*/  Point3d(-7.313,-4.819,0), Point3d(-5.936,0.5,0),  Point3d(-4,0,0), /*Point3d(5.377,-5.32,0),*/ Point3d(4,0,0),Point3d(5.936,0.5,0),Point3d(7.313,-4.819,0));
 
-
-const Mat camera_matrix = (cv::Mat_<float>(3,3) << 786.42, 0, 297.35, 0 , 780.45, 214.74, 0, 0, 1);
-//const Mat dist_coeffs = (cv::Mat_<float>(1,5) <<  2.02296730e-01, -3.61888606e00,  -9.66524854e-03, -8.83399450e-03, 1.41721964e+01);
-const Mat dist_coeffs = (cv::Mat_<float>(1,5) <<  0, 0,  0, 0, 0);
-const Mat model_points = (cv::Mat_<Point3f>(1,8) <<  Point3d(-4.38,-5.32,0),  Point3d(-6.313,-4.819,0), Point3d(-5.936,0.5,0),  Point3d(-4,0,0), Point3d(4.377,-5.32,0), Point3d(4,0,0),Point3d(5.936,0.5,0),Point3d(6.313,-4.82,0));
-
-Scalar hsv_min(0,0,37);
+Scalar hsv_min(0,0,37); //good settings
+//Scalar hsv_min(39,14,104); //bad settings
 Scalar hsv_max(180,255,255);
-const int minArea = 200;
-const int minSolidity = 0.85;
-const double expectedAspectRation = 3.5;
-const double aspectRatioTolerance = 2;
+
+const int minArea = 229;
+const int minSolidity = 0.92;
+const double expectedAspectRation = 3.51;
+const double aspectRatioTolerance = 152;
 
 uchar *LUMBGR2HSV;
 uchar *d_LUMBGR2HSV;
@@ -184,6 +184,7 @@ vector<RotatedRect> getPotentialTargets(Mat mask)	{
 			}
 		}
 	}
+	//sort based on left to right
 	sort(targets.begin(), targets.end(), [](const RotatedRect& a, const RotatedRect& b)	{
 		return a.center.x < b.center.x;
 	});
@@ -208,7 +209,7 @@ class VisionTarget {
 			vector<Point2d> points;
 			Point2f pts[4];
 			left.points(pts);
-			for (int i = 0 ; i < 4 ; i++)
+			for (int i = 1 ; i < 4 ; i++) //ignore the bottom most point
 			{
   			points.push_back((Point2d)pts[i]);
 			}
@@ -218,7 +219,7 @@ class VisionTarget {
 			vector<Point2d> points;
 			Point2f pts[4];
 			right.points(pts);
-			for (int i = 0 ; i < 4 ; i++)
+			for (int i = 1 ; i < 4 ; i++) //ignore the bottom most point
 			{
 				points.push_back((Point2d)pts[i]);
 			}
@@ -228,7 +229,7 @@ class VisionTarget {
 				vector<Point2d> points;
 				vector<Point2d> leftPoints = leftTargetPointsClockwiseFromLowest();
 				vector<Point2d> rightPoints = rightTargetPointsClockwiseFromLowest();
-				points.reserve(8);
+				points.reserve(6); //the three top points on each rectangle
 				points.insert(points.end(), leftPoints.begin(), leftPoints.end());
 				points.insert(points.end(), rightPoints.begin(), rightPoints.end());
 				return points;
@@ -269,13 +270,12 @@ vector<cv::Point2d> getImagePointsFromFrame(Mat* frame)	{
 		VisionTarget target = getVisionTarget(targets);
 		if(target.targetType == 1) {
 			image_points = target.eightPointImageDescriptor();
-			/*
 			for(Point2f p : image_points)	{
 				circle(*frame, p, 5,color,5,LINE_8);
-			}*/
+			}
 		}
 	}
-	//debug.write(*frame);
+	debug.write(*frame);
 	return image_points;
 }
 
@@ -305,36 +305,35 @@ Vec3d getEulerAngles(Mat rotation_vector){
 void getRotationAndTranslationVectors(Mat* frame,Mat* rotation_vector,Mat* translation_vector, bool* newVector)	{
 	vector<cv::Point2d> image_points;
 	image_points = getImagePointsFromFrame(frame);
-	if(image_points.size() != 8) {
+	if(image_points.size() != 6) { //only need top 3 points of each target
 			*newVector = false;
 			return;
 	}
 	Mat image_points_matrix = Mat(image_points);
 	dist_coeffs.convertTo(dist_coeffs,CV_32F);
-	*newVector = cv::solvePnP(model_points,image_points_matrix,camera_matrix,dist_coeffs,*rotation_vector, *translation_vector, false,  SOLVEPNP_ITERATIVE);
+	//maybe make this ransac tomorrow
+	*newVector = cv::solvePnP(model_points,image_points_matrix,camera_matrix,dist_coeffs,*rotation_vector, *translation_vector, false, SOLVEPNP_ITERATIVE);
 }
 
 void processFrameThread(Mat* frame,Mat* rotation_vector,Mat* translation_vector, bool* newImage, bool* newVector)	{
 	for(;	; )	{
 		if(*newImage == false) continue;
 		getRotationAndTranslationVectors(frame,rotation_vector,translation_vector, newVector);
-		//cout << "Frame Processed\n";
 		if(*newVector)	{
 			Vec3d orientation = getEulerAngles(*rotation_vector);
-			string s = to_string((*translation_vector).at<double>(2,0)) + ";" + to_string((*translation_vector).at<double>(1,0)) + ";" + to_string((*translation_vector).at<double>(0,0)) + ";" +  to_string(orientation[1]) + ";\n";
-			cout << s;
+			//string s = to_string((*translation_vector).at<double>(2,0)) + ";" + to_string((*translation_vector).at<double>(1,0)) + ";" + to_string((*translation_vector).at<double>(0,0)) + ";" +  to_string(orientation[1]) + ";\n";
+			//cout << s;
+			myNetworkTable -> PutNumber ("Z Displacement", (*translation_vector).at<double>(2,0));
+			myNetworkTable -> PutNumber ("Y Displacement", (*translation_vector).at<double>(1,0));
+			myNetworkTable -> PutNumber ("X Displacement", (*translation_vector).at<double>(0,0));
+			myNetworkTable -> PutNumber ("Yaw", orientation[1]);
+			myNetworkTable -> Flush();
 		}
 		*newImage = false;
 	}
 }
 
-void printInfo()	{
-	NetworkTable::SetClientMode();
-	//NetworkTable::SetDSClientEnabled(false);
-	NetworkTable::SetIPAddress(llvm::StringRef(netTableAddress));
-	NetworkTable::Initialize();
-	myNetworkTable = NetworkTable::GetTable("JetsonData");
-}
+
 int main(int argc, char** argv)
 {
 	setDevice(0);
@@ -349,32 +348,29 @@ int main(int argc, char** argv)
 	Mat frame;
 	bool newImage = false;
 	bool newVector = false;
-	//video.open(STREAM_STRING, 0, 30, cv::Size(sizeX, sizeY), true);
-	//debug.open(DEBUG_STRING, 0,30,cv::Size(sizeX, sizeY), true);
+
+	debug.open(DEBUG_STRING, 0,30,cv::Size(sizeX, sizeY), true);
 	capture.set(CAP_PROP_FRAME_WIDTH, sizeX);
 	capture.set(CAP_PROP_FRAME_HEIGHT, sizeY);
 	capture.set(CAP_PROP_FPS, fps);
-	//thread print (printInfo);
+	NetworkTable::SetClientMode();
+	NetworkTable::SetIPAddress(llvm::StringRef(netTableAddress));
+	NetworkTable::Initialize();
+	myNetworkTable = NetworkTable::GetTable("JetsonData");
+	//Start processing thread
 	thread process (processFrameThread,&frame,&rotation_vector,&translation_vector,&newImage, &newVector);
-	int64_t lastImageSentTime = 0;
+
+	//int i = 0;
 	for (; ; )
 	{
 		capture.read(frame);
 		if (frame.empty())	{
 			break;
 		}
-		if(newVector)	{
-			Vec3d orientation = getEulerAngles(rotation_vector);
-			//Z, Y, X, yaw
-			/*
-			myNetworkTable -> PutNumber ("Z Displacement", (translation_vector).at<double>(2,0));
-	 		myNetworkTable -> PutNumber ("Y Displacement", (translation_vector).at<double>(1,0));
-	 		myNetworkTable -> PutNumber ("X Displacement", (translation_vector).at<double>(0,0));
-			myNetworkTable -> PutNumber ("Yaw", orientation[1]);
-	 		myNetworkTable -> Flush();
-			*/
-			newVector = false;
-		}
+		//imwrite("/home/ubuntu/VisionProcessing/calibrateImage" + std::to_string(i) + ".jpg",frame);
+		//i++;
+		//std::this_thread::sleep_for(std::chrono::milliseconds(500));
+		//video.write(frame);
 		newImage = true;
 	}
 }

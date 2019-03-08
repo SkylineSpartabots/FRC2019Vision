@@ -58,7 +58,7 @@ cv2.createTrackbar('minSolidity','image',0,100,setMinSolidity)
 cv2.createTrackbar('aspectRatio','image',0,600,setAspectRatio)
 cv2.createTrackbar('rationTolerance','image',0,400,aspectRatioTolerance)
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-    s.connect(('10.0.0.93',5807))
+    s.connect(('10.29.76.12',5807))
     print ("connected");
     while True:
         string = "%" + str(Hn) + ";" + str(Sn) + ";" + str(Vn) + ";" + str(Hx) + ";" + str(Sx) + ";" + str(Vx) + ";" + str(min_area) + ";" + str(min_solidity) + ";" + str(aspectRatio) + ";" + str(tolerance) + "%";
