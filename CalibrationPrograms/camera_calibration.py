@@ -9,35 +9,39 @@ import os
 
 if __name__ == '__main__':
     import sys
-    square_size = 15/16
-    pattern_size = (6, 9)
+    square_size = 6.8/2.54
+    pattern_size = (7, 10)
     pattern_points = np.zeros((np.prod(pattern_size), 3), np.float32)
     pattern_points[:, :2] = np.indices(pattern_size).T.reshape(-1, 2)
     pattern_points *= square_size
     obj_points = []
     img_points = []
 
-    img_names = os.listdir(r"C:\Users\NeilHazra\Documents\VisionProcessingChessboard")
+    img_names = os.listdir(r"E:\FRC-2019\VisionProcessingFRC2019\Images2")
 
-    h, w = cv.imread("C:\\Users\\NeilHazra\\Documents\\VisionProcessingChessboard\\" + img_names[0], cv.IMREAD_GRAYSCALE).shape[:2]
+    h, w = cv.imread("E:\\FRC-2019\\VisionProcessingFRC2019\\Images2\\" + img_names[0], cv.IMREAD_GRAYSCALE).shape[:2]
     def processImage(fn):
         print('processing %s... ' % fn)
-        img = cv.imread("C:\\Users\\NeilHazra\\Documents\\VisionProcessingChessboard\\" + fn, 0)
+        img = cv.imread("E:\\FRC-2019\\VisionProcessingFRC2019\\Images2\\" + fn, 0)
         #img = cv.threshold(img, 150, 255, cv.THRESH_BINARY)[1]
-        cv.imshow("", img)
-        cv.waitKey(10)
+
         if img is None:
             print("Failed to load", fn)
             return None
         assert w == img.shape[1] and h == img.shape[0], ("size: %d x %d ... " % (img.shape[1], img.shape[0]))
+        print(img.shape)
         found, corners = cv.findChessboardCorners(img , pattern_size)
         if found:
             print('chessboard found')
             term = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_COUNT, 30, 0.1)
             cv.cornerSubPix(img, corners, (5, 5), (-1, -1), term)
-        if not found:
-            print('chessboard not found')
-            return None
+            img = cv.drawChessboardCorners(img, pattern_size, corners,found)
+            cv.imwrite("E:\\FRC-2019\\VisionProcessingFRC2019\\Images3\\" + fn,img);
+            cv.imshow("", img)
+            cv.waitKey(0)
+            if not found:
+                print('chessboard not found')
+                return None
         return (corners.reshape(-1, 2), pattern_points)
     threads_num = int(1)
     print("Run with %d threads..." % threads_num)
@@ -45,6 +49,7 @@ if __name__ == '__main__':
     pool = ThreadPool(threads_num)
     chessboards = pool.map(processImage, img_names)
     chessboards = [x for x in chessboards if x is not None]
+    #print(chessboards)
     for (corners, pattern_points) in chessboards:
         img_points.append(corners)
         obj_points.append(pattern_points)
